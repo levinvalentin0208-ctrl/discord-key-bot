@@ -2,38 +2,39 @@ const {
   Client,
   GatewayIntentBits,
   PermissionsBitField,
-  Events,
-  EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
-  TextInputStyle
+  TextInputStyle,
+  EmbedBuilder,
+  ChannelType,
 } = require("discord.js");
-const fs = require("fs");
+
+const mongoose = require("mongoose");
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
-  partials: ["CHANNEL"]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.DirectMessages,
+  ],
 });
 
-// ===== DOWNLOAD LINKS (PLACEHOLDER) =====
-const DOWNLOADS = {
-  pack1: "https://example.com/pack1.zip",
-  pack2: "https://example.com/pack2.zip",
-  pack3: "https://example.com/pack3.zip",
-  pack4: "https://example.com/pack4.zip"
-};
+/* ================= DATABASE ================= */
 
-// ===== KEY STORAGE =====
-function loadKeys() {
-  return JSON.parse(fs.readFileSync("./keys.json", "utf8"));
-}
+mongoose.connect(process.env.MONGO_URI);
 
-function saveKeys(data) {
-  fs.writeFileSync("./keys.json", JSON.stringify(data, null, 2));
-}
+const keySchema = new mongoose.Schema({
+  key: String,
+  pack: String,
+  userId: String,
+  used: Boolean,
+});
+
+const Key = mongoose.model("Key", keySchema);
+
+/* ================= KEY GENERATOR ================= */
 
 function generateKey() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -44,119 +45,147 @@ function generateKey() {
   return key;
 }
 
-// ===== READY =====
-client.once(Events.ClientReady, () => {
+/* ================= READY ================= */
+
+client.once("ready", () => {
   console.log("✅ Bot online");
 });
 
-// ===== INTERACTIONS =====
-client.on(Events.InteractionCreate, async (interaction) => {
+/* ================= INTERACTIONS ================= */
 
-  // ===== /embed =====
-  if (interaction.isChatInputCommand() && interaction.commandName === "embed") {
-    await interaction.deferReply({ ephemeral: true });
+client.on("interactionCreate", async (interaction) => {
 
+  /* ===== /generatekey ===== */
+  if (interaction.isChatInputCommand() && interaction.commandName === "generatekey") {
     if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return interaction.editReply("❌ No permission");
+      return interaction.reply({ content: "❌ No permission", ephemeral: true });
+    }
+
+    const pack = interaction.options.getString("pack");
+    const user = interaction.options.getUser("user");
+
+    const key = generateKey();
+
+    await Key.create({
+      key,
+      pack,
+      userId: user.id,
+      used: false,
+    });
+
+    await user.send(
+      `🔑 **Your key**\n\n📦 Pack: **${pack}**\n\`${key}\`\n\nThis key is personal and one-time use.`
+    );
+
+    return interaction.reply({
+      content: `✅ Key created for ${user}\n\`${key}\``,
+      ephemeral: true,
+    });
+  }
+
+  /* ===== /resetkey ===== */
+  if (interaction.isChatInputCommand() && interaction.commandName === "resetkey") {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply({ content: "❌ No permission", ephemeral: true });
+    }
+
+    const pack = interaction.options.getString("pack");
+    const user = interaction.options.getUser("user");
+
+    const newKey = generateKey();
+
+    await Key.create({
+      key: newKey,
+      pack,
+      userId: user.id,
+      used: false,
+    });
+
+    await user.send(
+      `♻️ **Your key was reset**\n\n📦 Pack: **${pack}**\n\`${newKey}\``
+    );
+
+    return interaction.reply({
+      content: "✅ Key reset complete",
+      ephemeral: true,
+    });
+  }
+
+  /* ===== /embed ===== */
+  if (interaction.isChatInputCommand() && interaction.commandName === "embed") {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+      return interaction.reply({ content: "❌ No permission", ephemeral: true });
     }
 
     const embed = new EmbedBuilder()
-      .setTitle("🎬 Lawliet Edit Pack System")
+      .setTitle("🎁 Digital Pack Store")
       .setDescription(
-        "**How it works:**\n" +
-        "1️⃣ Click the button below\n" +
-        "2️⃣ Enter your product key\n" +
-        "3️⃣ Receive your download instantly\n\n" +
-        "🌐 Website: https://lawliet.teamviz.org/\n" +
-        "💬 Discord: https://discord.gg/lawliethq"
+        "**Payments:**\n" +
+        "💳 PayPal\n💶 Paysafecard\n🎮 Valorant Points\n\n" +
+        "**Steps:**\n" +
+        "• Buy a key from an admin\n" +
+        "• Click **Enter Key**\n" +
+        "• Receive your download\n\n" +
+        "🌐 https://lawliet.teamviz.org/\n" +
+        "💬 https://discord.gg/lawliethq"
       )
-      .setColor(0x5865F2)
-      .setFooter({ text: "Lawliet • Digital Products" });
+      .setColor(0x5865f2);
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId("redeem_key")
-        .setLabel("Redeem Key")
-        .setStyle(ButtonStyle.Primary)
-    );
+    const button = new ButtonBuilder()
+      .setCustomId("enter_key")
+      .setLabel("Enter Key")
+      .setStyle(ButtonStyle.Primary);
 
-    await interaction.channel.send({ embeds: [embed], components: [row] });
-    return interaction.editReply("✅ Embed sent");
+    return interaction.reply({
+      embeds: [embed],
+      components: [new ActionRowBuilder().addComponents(button)],
+    });
   }
 
-  // ===== BUTTON =====
-  if (interaction.isButton() && interaction.customId === "redeem_key") {
+  /* ===== BUTTON ===== */
+  if (interaction.isButton() && interaction.customId === "enter_key") {
     const modal = new ModalBuilder()
-      .setCustomId("redeem_modal")
-      .setTitle("Redeem your key");
+      .setCustomId("key_modal")
+      .setTitle("Enter your key");
 
     const input = new TextInputBuilder()
       .setCustomId("key_input")
-      .setLabel("Enter your key")
+      .setLabel("16-character key")
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
     modal.addComponents(new ActionRowBuilder().addComponents(input));
-    return interaction.showModal(modal);
+    await interaction.showModal(modal);
   }
 
-  // ===== MODAL =====
-  if (interaction.isModalSubmit() && interaction.customId === "redeem_modal") {
-    await interaction.deferReply({ ephemeral: true });
+  /* ===== KEY CHECK ===== */
+  if (interaction.isModalSubmit() && interaction.customId === "key_modal") {
+    const enteredKey = interaction.fields.getTextInputValue("key_input");
 
-    const inputKey = interaction.fields.getTextInputValue("key_input");
-    const keys = loadKeys();
+    const data = await Key.findOne({ key: enteredKey });
 
-    if (!keys[inputKey]) {
-      return interaction.editReply("❌ Invalid key");
+    if (!data) {
+      return interaction.reply({ content: "❌ Invalid key", ephemeral: true });
     }
 
-    if (keys[inputKey].used) {
-      return interaction.editReply("❌ This key has already been used");
+    if (data.used) {
+      return interaction.reply({ content: "❌ Key already used", ephemeral: true });
     }
 
-    const pack = keys[inputKey].pack;
-    keys[inputKey].used = true;
-    saveKeys(keys);
-
-    // ===== DM SEND =====
-    try {
-      await interaction.user.send(
-        `✅ **Key successfully redeemed**\n\n` +
-        `📦 Pack: **${pack}**\n` +
-        `🔗 Download:\n${DOWNLOADS[pack]}\n\n` +
-        `Thank you for your support ❤️`
-      );
-    } catch (err) {
-      console.log("⚠️ Could not send DM");
+    if (interaction.user.id !== data.userId) {
+      return interaction.reply({ content: "❌ This key is not for you", ephemeral: true });
     }
 
-    return interaction.editReply(
-      `✅ **Key successfully redeemed**\n\n📦 Pack: **${pack}**\n📩 Check your DMs for the download link.`
-    );
-  }
+    data.used = true;
+    await data.save();
 
-  // ===== /generatekey =====
-  if (interaction.isChatInputCommand() && interaction.commandName === "generatekey") {
-    await interaction.deferReply({ ephemeral: true });
-
-    if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return interaction.editReply("❌ No permission");
-    }
-
-    const pack = interaction.options.getString("pack");
-    const keys = loadKeys();
-    const key = generateKey();
-
-    keys[key] = { pack: pack, used: false };
-    saveKeys(keys);
-
-    return interaction.editReply(
-      `🔑 **Key generated**\n📦 Pack: **${pack}**\n\`${key}\``
-    );
+    return interaction.reply({
+      content: `✅ **Access granted**\n📦 Pack: **${data.pack}**\n🔗 Download link: *coming soon*`,
+      ephemeral: true,
+    });
   }
 });
 
-// ===== LOGIN =====
-client.login("process.env.DISCORD_TOKEN");
+/* ================= LOGIN ================= */
 
+client.login(process.env.DISCORD_TOKEN);
