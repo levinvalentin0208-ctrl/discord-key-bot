@@ -158,4 +158,5 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 // ===== LOGIN =====
-client.login("MTQ2MjUzOTkwMDkyNTUwOTc3Ng.Gl8RJr.3uNCh4hLUaWLF0CQgUCuhr4J61jYS2iIdtXimU");
+client.login("process.env.DISCORD_TOKEN");
+
