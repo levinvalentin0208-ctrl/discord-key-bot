@@ -2,17 +2,14 @@ const {
   Client,
   GatewayIntentBits,
   PermissionsBitField,
+  EmbedBuilder,
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  EmbedBuilder,
-  ChannelType,
 } = require("discord.js");
-
-const mongoose = require("mongoose");
 
 const client = new Client({
   intents: [
@@ -21,18 +18,16 @@ const client = new Client({
   ],
 });
 
-/* ================= DATABASE ================= */
+/* ================= SERVER WHITELIST ================= */
 
-mongoose.connect(process.env.MONGO_URI);
+const ALLOWED_GUILDS = [
+  "1462172999267520584",
+  "1459780567511072863"
+];
 
-const keySchema = new mongoose.Schema({
-  key: String,
-  pack: String,
-  userId: String,
-  used: Boolean,
-});
+/* ================= KEY STORAGE ================= */
 
-const Key = mongoose.model("Key", keySchema);
+const keys = new Map();
 
 /* ================= KEY GENERATOR ================= */
 
@@ -48,12 +43,20 @@ function generateKey() {
 /* ================= READY ================= */
 
 client.once("ready", () => {
-  console.log("✅ Bot online");
+  console.log("✅ Bot online (multi-server mode)");
 });
 
 /* ================= INTERACTIONS ================= */
 
 client.on("interactionCreate", async (interaction) => {
+
+  /* ===== SERVER CHECK ===== */
+  if (!ALLOWED_GUILDS.includes(interaction.guildId)) {
+    return interaction.reply({
+      content: "❌ This bot is not available on this server.",
+      ephemeral: true,
+    });
+  }
 
   /* ===== /generatekey ===== */
   if (interaction.isChatInputCommand() && interaction.commandName === "generatekey") {
@@ -65,20 +68,23 @@ client.on("interactionCreate", async (interaction) => {
     const user = interaction.options.getUser("user");
 
     const key = generateKey();
+    keys.set(key, { pack, userId: user.id, used: false });
 
-    await Key.create({
-      key,
-      pack,
-      userId: user.id,
-      used: false,
-    });
+    const dmEmbed = new EmbedBuilder()
+      .setTitle("🔑 Your Access Key")
+      .setDescription(
+        `**Pack:** ${pack}\n\n` +
+        `\`${key}\`\n\n` +
+        "⚠️ This key is **one-time use** and **user locked**."
+      )
+      .setColor(0x57f287);
 
-    await user.send(
-      `🔑 **Your key**\n\n📦 Pack: **${pack}**\n\`${key}\`\n\nThis key is personal and one-time use.`
-    );
+    try {
+      await user.send({ embeds: [dmEmbed] });
+    } catch {}
 
     return interaction.reply({
-      content: `✅ Key created for ${user}\n\`${key}\``,
+      content: `✅ Key generated for ${user}`,
       ephemeral: true,
     });
   }
@@ -93,20 +99,25 @@ client.on("interactionCreate", async (interaction) => {
     const user = interaction.options.getUser("user");
 
     const newKey = generateKey();
+    keys.set(newKey, { pack, userId: user.id, used: false });
 
-    await Key.create({
-      key: newKey,
-      pack,
-      userId: user.id,
-      used: false,
-    });
+    const embed = new EmbedBuilder()
+      .setTitle("♻️ Key Reset")
+      .setDescription(
+        `👤 User: ${user}\n` +
+        `📦 Pack: **${pack}**\n\n` +
+        `🔑 New Key:\n\`${newKey}\``
+      )
+      .setColor(0xfee75c);
 
-    await user.send(
-      `♻️ **Your key was reset**\n\n📦 Pack: **${pack}**\n\`${newKey}\``
-    );
+    try {
+      await user.send({ embeds: [embed] });
+    } catch {}
+
+    await interaction.channel.send({ embeds: [embed] });
 
     return interaction.reply({
-      content: "✅ Key reset complete",
+      content: "✅ Key reset completed",
       ephemeral: true,
     });
   }
@@ -118,13 +129,13 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     const embed = new EmbedBuilder()
-      .setTitle("🎁 Digital Pack Store")
+      .setTitle("🎁 Lawliet Digital Packs")
       .setDescription(
-        "**Payments:**\n" +
-        "💳 PayPal\n💶 Paysafecard\n🎮 Valorant Points\n\n" +
-        "**Steps:**\n" +
-        "• Buy a key from an admin\n" +
-        "• Click **Enter Key**\n" +
+        "💳 PayPal | 💶 Paysafecard | 🎮 Valorant Points\n\n" +
+        "**How it works:**\n" +
+        "• Purchase a key from an admin\n" +
+        "• Click the button below\n" +
+        "• Enter your key\n" +
         "• Receive your download\n\n" +
         "🌐 https://lawliet.teamviz.org/\n" +
         "💬 https://discord.gg/lawliethq"
@@ -150,7 +161,7 @@ client.on("interactionCreate", async (interaction) => {
 
     const input = new TextInputBuilder()
       .setCustomId("key_input")
-      .setLabel("16-character key")
+      .setLabel("Your 16-character key")
       .setStyle(TextInputStyle.Short)
       .setRequired(true);
 
@@ -158,11 +169,10 @@ client.on("interactionCreate", async (interaction) => {
     await interaction.showModal(modal);
   }
 
-  /* ===== KEY CHECK ===== */
+  /* ===== MODAL ===== */
   if (interaction.isModalSubmit() && interaction.customId === "key_modal") {
     const enteredKey = interaction.fields.getTextInputValue("key_input");
-
-    const data = await Key.findOne({ key: enteredKey });
+    const data = keys.get(enteredKey);
 
     if (!data) {
       return interaction.reply({ content: "❌ Invalid key", ephemeral: true });
@@ -173,19 +183,21 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.user.id !== data.userId) {
-      return interaction.reply({ content: "❌ This key is not for you", ephemeral: true });
+      return interaction.reply({ content: "❌ This key is not assigned to you", ephemeral: true });
     }
 
     data.used = true;
-    await data.save();
 
-    return interaction.reply({
-      content: `✅ **Access granted**\n📦 Pack: **${data.pack}**\n🔗 Download link: *coming soon*`,
-      ephemeral: true,
-    });
+    const embed = new EmbedBuilder()
+      .setTitle("✅ Access Granted")
+      .setDescription(
+        `📦 Pack: **${data.pack}**\n\n` +
+        "🔗 Download:\nComing soon"
+      )
+      .setColor(0x57f287);
+
+    return interaction.reply({ embeds: [embed], ephemeral: true });
   }
 });
-
-/* ================= LOGIN ================= */
 
 client.login(process.env.DISCORD_TOKEN);
